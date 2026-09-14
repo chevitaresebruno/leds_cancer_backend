@@ -42,9 +42,9 @@ INSTALLED_APPS: list[str] = [
     "corsheaders",
     "drf_spectacular",
     # Self Apps
-    "authentication.apps.AuthenticationConfig",
-    "patients.apps.PatientsConfig",
-    "exams.apps.ExamsConfig",
+    "authentication",
+    "patients",
+    "exams",
 ]
 
 MIDDLEWARE = [
@@ -83,6 +83,7 @@ _database_url: str = config("DATABASE_URL", default="")
 
 if _database_url:
     import dj_database_url  # type: ignore[import-untyped]
+
     DATABASES: dict[str, Any] = {"default": dj_database_url.parse(_database_url)}
 else:
     DATABASES = {
@@ -97,7 +98,9 @@ else:
 AUTH_USER_MODEL = "authentication.User"
 
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
+    },
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},

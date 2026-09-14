@@ -15,6 +15,9 @@ dependencies = [
     "django-cors-headers>=4.9.0",
     "djangorestframework-simplejwt>=5.5.1",
     "djangorestframework-stubs>=3.15.3",
+    "drf-spectacular>=0.30.0",
+    "pillow>=11.3.0",
+    "python-decouple>=3.8",
 ]
 
 # Ferramentas de qualidade
