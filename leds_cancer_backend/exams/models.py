@@ -1,16 +1,28 @@
 from django.conf import settings
 from django.db import models
-
 from patients.models import Patient
+from scripts import IAIService, LaudoStatus
 
 
 class ExamStatus(models.TextChoices):
     """Status possíveis de um exame de mamografia."""
 
-    PENDENTE = "pendente", "Pendente"
-    EM_ANALISE = "em_analise", "Em análise"
-    CONCLUIDO = "concluido", "Concluído"
-    CANCELADO = "cancelado", "Cancelado"
+    EM_ANALISE = "em_analise", "Em análise"  # em análise pelo serviço de IA
+    PENDENTE = "pendente", "Pendente"  # aguardando ação do médico após análise da IA
+    CONCLUIDO = "concluido", "Concluído"  # já analisado pelo médico
+    CANCELADO = "cancelado", "Cancelado"  # status de erro vindo do serviço de IA
+
+    @staticmethod
+    def from_laudo_status(laudo_status: LaudoStatus) -> "ExamStatus":
+        match (laudo_status):
+            case LaudoStatus.IN_PROCESSING:
+                return ExamStatus.EM_ANALISE
+            case LaudoStatus.FINISHED:
+                return ExamStatus.PENDENTE
+            case LaudoStatus.ERROR:
+                return ExamStatus.CANCELADO
+            case _:
+                raise Exception(f"status {laudo_status} nao mapeado")
 
 
 class ExamTechnique(models.TextChoices):
@@ -69,7 +81,9 @@ class Exam(models.Model):
         choices=BreastSide.choices,
         verbose_name="Lado",
     )
-    clinical_history = models.TextField(blank=True, default="", verbose_name="Histórico clínico")
+    clinical_history = models.TextField(
+        blank=True, default="", verbose_name="Histórico clínico"
+    )
     requesting_physician = models.CharField(
         max_length=200,
         blank=True,
@@ -85,7 +99,7 @@ class Exam(models.Model):
     status = models.CharField(
         max_length=15,
         choices=ExamStatus.choices,
-        default=ExamStatus.PENDENTE,
+        default=ExamStatus.EM_ANALISE,
         verbose_name="Status",
     )
     radiologist = models.ForeignKey(
@@ -98,6 +112,8 @@ class Exam(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    report_id = models.BigIntegerField(verbose_name="Report ID", blank=True)
 
     class Meta:
         verbose_name = "Exame"
@@ -116,6 +132,20 @@ class Exam(models.Model):
         if self.radiologist:
             return self.radiologist.get_full_name() or self.radiologist.username
         return "Aguardando atribuição"
+
+    def update_in_memory_status(self, service: IAIService) -> None | str:
+        if self.status == ExamStatus.CONCLUIDO:
+            return None
+        service_response = service.get_status(self.pk)
+        self.status = ExamStatus.from_laudo_status(service_response.status)
+        return service_response.err
+
+    def update_in_db_status(self, service: IAIService) -> None | str:
+        resp = self.update_in_memory_status(service)
+        if resp is None:
+            self.save()
+
+        return resp
 
     def __str__(self) -> str:
         return f"{self.patient.name} — {self.exam_type} ({self.exam_date})"

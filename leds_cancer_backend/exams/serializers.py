@@ -72,13 +72,22 @@ class ExamListSerializer(serializers.ModelSerializer):
     breast_side = serializers.CharField()
     requesting_physician = serializers.CharField()
     clinical_history = serializers.CharField()
+    error = serializers.CharField(read_only=True, allow_null=True)
 
     class Meta:
         model = Exam
         fields = (
-            "id", "patient_id", "patient_name", "datetime",
-            "exam_type", "status", "radiologist", "breast_side",
-            "requesting_physician", "clinical_history",
+            "id",
+            "patient_id",
+            "patient_name",
+            "datetime",
+            "exam_type",
+            "status",
+            "radiologist",
+            "breast_side",
+            "requesting_physician",
+            "clinical_history",
+            "error",
         )
 
     def get_datetime(self, obj: Exam) -> str:
@@ -107,12 +116,27 @@ class ExamWriteSerializer(serializers.ModelSerializer):
         input_formats=[DATE_FORMAT, "%Y-%m-%d"],
     )
 
+    llm_version = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, allow_null=True
+    )
+    pdai_version = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, allow_null=True
+    )
+
     class Meta:
         model = Exam
         fields = (
-            "patient", "exam_date", "technique", "breast_side",
-            "clinical_history", "requesting_physician", "image_file",
-            "status", "radiologist",
+            "patient",
+            "exam_date",
+            "technique",
+            "breast_side",
+            "clinical_history",
+            "requesting_physician",
+            "image_file",
+            "status",
+            "radiologist",
+            "llm_version",
+            "pdai_version",
         )
         extra_kwargs = {
             "image_file": {"required": False},

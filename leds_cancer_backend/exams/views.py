@@ -1,10 +1,16 @@
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from django.db.transaction import atomic as atomic_transaction
+from django.http import HttpResponse
+from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import status
+from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from scripts import DEPENDENCIES, LaudoPayload, LaudoStatus
+
+from leds_cancer_backend.exams.models import Exam
 
 from .repositories import ExamRepository
 from .serializers import (
@@ -72,6 +78,11 @@ class ExamListCreateView(APIView):
         else:
             exams = _repo.get_all()
 
+        for exam in exams:
+            err = exam.update_in_db_status(DEPENDENCIES.AI_SERVICE)
+            if err is not None:
+                setattr(exam, "error", err)
+
         return Response(ExamListSerializer(exams, many=True).data)
 
     def post(self, request: Request) -> Response:
@@ -85,15 +96,40 @@ class ExamListCreateView(APIView):
         """
         serializer = ExamWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        exam = _repo.create(**serializer.validated_data)
+        with atomic_transaction():
+            exam = Exam(**serializer.validated_data)
+            llm_version: str | None = serializer.validated_data.get("llm_version")
+            pdai_version: str | None = serializer.validated_data.get("pdai_version")
+
+            payload = LaudoPayload.from_request(exam.pk, llm_version, pdai_version)
+            response = DEPENDENCIES.AI_SERVICE.new_report(payload)
+
+            exam.report_id = response.laudo_id
+
+            exam.save()
+
         return Response(ExamListSerializer(exam).data, status=status.HTTP_201_CREATED)
 
 
 @extend_schema_view(
-    get=extend_schema(tags=[_TAG_EXAMS], summary="Detalhe do exame", responses=ExamListSerializer),
-    put=extend_schema(tags=[_TAG_EXAMS], summary="Atualizar exame (completo)", request=ExamWriteSerializer, responses=ExamListSerializer),
-    patch=extend_schema(tags=[_TAG_EXAMS], summary="Atualizar exame (parcial)", request=ExamWriteSerializer, responses=ExamListSerializer),
-    delete=extend_schema(tags=[_TAG_EXAMS], summary="Remover exame", responses={204: None}),
+    get=extend_schema(
+        tags=[_TAG_EXAMS], summary="Detalhe do exame", responses=ExamListSerializer
+    ),
+    put=extend_schema(
+        tags=[_TAG_EXAMS],
+        summary="Atualizar exame (completo)",
+        request=ExamWriteSerializer,
+        responses=ExamListSerializer,
+    ),
+    patch=extend_schema(
+        tags=[_TAG_EXAMS],
+        summary="Atualizar exame (parcial)",
+        request=ExamWriteSerializer,
+        responses=ExamListSerializer,
+    ),
+    delete=extend_schema(
+        tags=[_TAG_EXAMS], summary="Remover exame", responses={204: None}
+    ),
 )
 class ExamDetailView(APIView):
     """Operações sobre um exame específico.
@@ -118,7 +154,9 @@ class ExamDetailView(APIView):
         """
         exam = _repo.get_by_id(exam_id)
         if exam is None:
-            return Response({"detail": "Exame não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Exame não encontrado."}, status=status.HTTP_404_NOT_FOUND
+            )
         return exam
 
     def get(self, request: Request, pk: int) -> Response:
@@ -155,6 +193,41 @@ class ExamDetailView(APIView):
             return result
         _repo.delete(result)  # type: ignore[arg-type]
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        summary="Download do arquivo do exame",
+        responses={
+            200: OpenApiResponse(
+                description="Arquivo do exame",
+            ),
+        },
+    )
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="download",
+    )
+    def download(self, _: Request, pk: int) -> HttpResponse:
+        exam = Exam.objects.filter(pk=pk).first()
+
+        if exam is None:
+            raise Exception()
+
+        response = DEPENDENCIES.AI_SERVICE.get_report(laudo_id=exam.report_id)
+        if response.is_ok:
+            import base64
+
+            content = base64.b64decode(response.report)
+
+            response = HttpResponse(
+                content,
+                content_type="application/pdf",
+            )
+            response["Content-Disposition"] = 'attachment; filename="exam.pdf"'
+
+            return response
+
+        raise Exception()  # TODO : implement errors layers
 
 
 @extend_schema(
@@ -244,7 +317,9 @@ class ExamImageTokenView(APIView):
         """
         exam = _repo.get_by_id(pk)
         if exam is None:
-            return Response({"detail": "Exame não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Exame não encontrado."}, status=status.HTTP_404_NOT_FOUND
+            )
         if not exam.image_file:
             return Response(
                 {"detail": "Este exame não possui imagem associada."},
@@ -316,7 +391,9 @@ class ExamImageDownloadView(APIView):
 
         exam = _repo.get_by_id(pk)
         if exam is None:
-            return Response({"detail": "Exame não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Exame não encontrado."}, status=status.HTTP_404_NOT_FOUND
+            )
         if not exam.image_file:
             return Response(
                 {"detail": "Este exame não possui imagem associada."},
