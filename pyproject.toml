@@ -7,7 +7,7 @@ name = "leds_cancer_backend"
 version = "0.1.0"
 description = "Descrição do projeto"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "Seu Nome", email = "seu@email.com"}
 ]

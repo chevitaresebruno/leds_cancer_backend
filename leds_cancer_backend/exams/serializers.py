@@ -1,5 +1,3 @@
-from typing import Any
-
 from rest_framework import serializers
 
 from .models import Exam
@@ -42,10 +40,11 @@ class RecentExamSerializer(serializers.ModelSerializer):
     patient_name = serializers.CharField(source="patient.name")
     datetime = serializers.SerializerMethodField()
     exam_type = serializers.SerializerMethodField()
+    error = serializers.CharField(read_only=True, allow_null=True)
 
     class Meta:
         model = Exam
-        fields = ("id", "patient_name", "datetime", "exam_type", "status")
+        fields = ("id", "patient_name", "datetime", "exam_type", "status", "error")
 
     def get_datetime(self, obj: Exam) -> str:
         """Retorna data/hora de criação no formato ``dd/MM/yyyy HH:MM``."""
@@ -138,7 +137,7 @@ class ExamWriteSerializer(serializers.ModelSerializer):
             "llm_version",
             "pdai_version",
         )
-        extra_kwargs = {
+        extra_kwargs = {  # noqa: RUF012
             "image_file": {"required": False},
             "status": {"required": False},
             "radiologist": {"required": False},

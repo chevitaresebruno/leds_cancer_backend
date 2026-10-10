@@ -2,8 +2,8 @@ from enum import StrEnum
 
 
 class PreDiagnosisVersions(StrEnum):
-    LEATEST = "V0"
-    DEFAULT = "V0"
+    LEATEST = "v0"
+    DEFAULT = "v0"
     BEST = "v0"
     V0 = "v0"
 

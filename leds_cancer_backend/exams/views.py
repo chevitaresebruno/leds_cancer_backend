@@ -1,17 +1,22 @@
 from django.db.transaction import atomic as atomic_transaction
 from django.http import HttpResponse
-from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    extend_schema,
+    extend_schema_view,
+)
 from rest_framework import status
-from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import JSONRenderer
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from scripts import DEPENDENCIES, LaudoPayload, LaudoStatus
 
-from leds_cancer_backend.exams.models import Exam
+from exams.models import Exam, ExamStatus
+from scripts import DEPENDENCIES, LaudoPayload
 
+from .renderers import PDFRenderer
 from .repositories import ExamRepository
 from .serializers import (
     DashboardStatsSerializer,
@@ -101,10 +106,16 @@ class ExamListCreateView(APIView):
             llm_version: str | None = serializer.validated_data.get("llm_version")
             pdai_version: str | None = serializer.validated_data.get("pdai_version")
 
+            exam.save()
             payload = LaudoPayload.from_request(exam.pk, llm_version, pdai_version)
-            response = DEPENDENCIES.AI_SERVICE.new_report(payload)
 
-            exam.report_id = response.laudo_id
+            try:
+                response = DEPENDENCIES.AI_SERVICE.new_report(payload)
+                exam.report_id = response.laudo_id
+            except Exception as e:
+                print(e)
+                exam.status = ExamStatus.NOT_SENT
+                exam.report_id = None
 
             exam.save()
 
@@ -194,40 +205,39 @@ class ExamDetailView(APIView):
         _repo.delete(result)  # type: ignore[arg-type]
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+
+class ExamDownloadView(APIView):
+    permission_classes = (IsAuthenticated,)
+    parser_classes = (MultiPartParser, FormParser)
+    renderer_classes = (PDFRenderer, JSONRenderer)
+
     @extend_schema(
         summary="Download do arquivo do exame",
         responses={
-            200: OpenApiResponse(
-                description="Arquivo do exame",
-            ),
+            (200, "application/pdf"): OpenApiTypes.BINARY,
         },
     )
-    @action(
-        detail=True,
-        methods=["get"],
-        url_path="download",
-    )
-    def download(self, _: Request, pk: int) -> HttpResponse:
+    def get(self, _: Request, pk: int) -> HttpResponse:
         exam = Exam.objects.filter(pk=pk).first()
 
         if exam is None:
             raise Exception()
 
         response = DEPENDENCIES.AI_SERVICE.get_report(laudo_id=exam.report_id)
-        if response.is_ok:
-            import base64
+        if not response.is_ok:
+            raise Exception()  # TODO : implement errors layers
 
-            content = base64.b64decode(response.report)
+        import base64
 
-            response = HttpResponse(
-                content,
-                content_type="application/pdf",
-            )
-            response["Content-Disposition"] = 'attachment; filename="exam.pdf"'
+        content = base64.b64decode(response.report)
 
-            return response
+        response = HttpResponse(
+            content,
+            content_type="application/pdf",
+        )
+        response["Content-Disposition"] = 'attachment; filename="exam.pdf"'
 
-        raise Exception()  # TODO : implement errors layers
+        return response
 
 
 @extend_schema(
@@ -256,6 +266,12 @@ class RecentExamsView(APIView):
         """
         limit = int(request.query_params.get("limit", 20))
         exams = _repo.get_recent(limit=limit)
+
+        for exam in exams:
+            err = exam.update_in_db_status(DEPENDENCIES.AI_SERVICE)
+            if err is not None:
+                setattr(exam, "error", err)
+
         return Response(RecentExamSerializer(exams, many=True).data)
 
 
@@ -351,21 +367,7 @@ class ExamImageDownloadView(APIView):
 
     permission_classes: list = []
 
-    def get(self, request: Request, pk: int) -> Response:
-        """Valida o token e serve o arquivo de imagem.
-
-        Args:
-            request: Query params ``token`` (HMAC hex) e ``expires`` (Unix ts).
-            pk: ID do exame.
-
-        Returns:
-            ``FileResponse`` com o arquivo de imagem.
-            HTTP 400 se os parâmetros forem inválidos.
-            HTTP 403 se o token for inválido ou expirado.
-            HTTP 404 se o exame ou arquivo não existir.
-        """
-        from django.http import FileResponse
-
+    def __validate_hmac_token(self, request: Request, pk: int) -> Response | None:
         token = request.query_params.get("token", "")
         expires_raw = request.query_params.get("expires", "")
 
@@ -388,6 +390,32 @@ class ExamImageDownloadView(APIView):
                 {"detail": "Token inválido ou expirado."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        return None
+
+    def get(self, request: Request, pk: int) -> Response:
+        """Valida o token e serve o arquivo de imagem.
+
+        Args:
+            request: Query params ``token`` (HMAC hex) e ``expires`` (Unix ts).
+            pk: ID do exame.
+
+        Returns:
+            ``FileResponse`` com o arquivo de imagem.
+            HTTP 400 se os parâmetros forem inválidos.
+            HTTP 403 se o token for inválido ou expirado.
+            HTTP 404 se o exame ou arquivo não existir.
+        """
+        # NOTE: essa verificação de debug só existe pq a api da IA ainda não está preparada para ler o token HMAC; então, em modo debug não exige token.
+
+        from django.conf import settings
+
+        if not settings.DEBUG:
+            self.__validate_hmac_token(request, pk)
+
+        # TODO: após adapções no código da IA remover a verificação e o comnetário de nota acima
+
+        from django.http import FileResponse
 
         exam = _repo.get_by_id(pk)
         if exam is None:

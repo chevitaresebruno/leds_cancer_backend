@@ -13,6 +13,3 @@ exclude =
 per-file-ignores =
     __init__.py:F401
 select = C,E,F,W,B,B950
-# B950: linha mais longa que 88 mas com erro? Na verdade, o flake8-bugbear já trata.
-# Vamos usar o plugin flake8-bugbear para regras adicionais
-# Instale: pip install flake8-bugbear

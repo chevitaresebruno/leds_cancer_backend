@@ -2,10 +2,10 @@ from enum import StrEnum
 
 
 class LLMVersions(StrEnum):
-    LEATEST = "V0"
-    DEFAULT = "V0"
-    BEST = "v0"
-    V0 = "v0"
+    LEATEST = "v1"
+    DEFAULT = "v1"
+    BEST = "v1"
+    V1 = "v1"
 
     @staticmethod
     def from_value(value: str | None) -> "LLMVersions":
@@ -14,7 +14,7 @@ class LLMVersions(StrEnum):
                 return LLMVersions.LEATEST
             case LLMVersions.BEST:
                 return LLMVersions.BEST
-            case LLMVersions.V0:
-                return LLMVersions.V0
+            case LLMVersions.V1:
+                return LLMVersions.V1
             case _:
                 return LLMVersions.DEFAULT

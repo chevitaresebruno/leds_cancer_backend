@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .LaudoFormats import LaudoFormats
@@ -25,7 +25,7 @@ class LaudoPayloadModel:
 @dataclass
 class LaudoPayload:
     image_id: int
-    model: LaudoPayloadModel = LaudoPayloadModel()
+    model: LaudoPayloadModel = field(default_factory=LaudoPayloadModel)
     format: LaudoFormats = LaudoFormats.DEFAULT
 
     @staticmethod

@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.db import models
 from patients.models import Patient
-from scripts import IAIService, LaudoStatus
+from scripts import IAIService, LaudoStatus, LaudoPayload
 
 
 class ExamStatus(models.TextChoices):
@@ -11,10 +11,14 @@ class ExamStatus(models.TextChoices):
     PENDENTE = "pendente", "Pendente"  # aguardando ação do médico após análise da IA
     CONCLUIDO = "concluido", "Concluído"  # já analisado pelo médico
     CANCELADO = "cancelado", "Cancelado"  # status de erro vindo do serviço de IA
+    NOT_SENT = (
+        "não enviado",
+        "Não Enviado",
+    )  # o exame foi criado com sucesso, mas houve um erro en enviá-lo para a API
 
     @staticmethod
     def from_laudo_status(laudo_status: LaudoStatus) -> "ExamStatus":
-        match (laudo_status):
+        match laudo_status:
             case LaudoStatus.IN_PROCESSING:
                 return ExamStatus.EM_ANALISE
             case LaudoStatus.FINISHED:
@@ -99,7 +103,7 @@ class Exam(models.Model):
     status = models.CharField(
         max_length=15,
         choices=ExamStatus.choices,
-        default=ExamStatus.EM_ANALISE,
+        default=ExamStatus.NOT_SENT,
         verbose_name="Status",
     )
     radiologist = models.ForeignKey(
@@ -113,13 +117,23 @@ class Exam(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    report_id = models.BigIntegerField(verbose_name="Report ID", blank=True)
+    report_id = models.CharField(
+        max_length=255, verbose_name="Report ID", blank=True, null=True
+    )
 
     class Meta:
         verbose_name = "Exame"
         verbose_name_plural = "Exames"
         db_table = "exams_exam"
         ordering = ["-exam_date", "-created_at"]
+
+        constraints = (
+            models.CheckConstraint(
+                condition=models.Q(report_id__isnull=False)
+                | models.Q(status=ExamStatus.NOT_SENT),
+                name="exam_report_required_unless_not_sent",
+            ),
+        )
 
     @property
     def exam_type(self) -> str:
@@ -133,12 +147,25 @@ class Exam(models.Model):
             return self.radiologist.get_full_name() or self.radiologist.username
         return "Aguardando atribuição"
 
+    def __send(self, service: IAIService):
+        payload = LaudoPayload(self.pk)
+        response = service.new_report(payload)
+        self.report_id = response.laudo_id
+        self.status = ExamStatus.EM_ANALISE
+
     def update_in_memory_status(self, service: IAIService) -> None | str:
         if self.status == ExamStatus.CONCLUIDO:
             return None
-        service_response = service.get_status(self.pk)
-        self.status = ExamStatus.from_laudo_status(service_response.status)
-        return service_response.err
+        try:
+            if self.status == ExamStatus.NOT_SENT:
+                self.__send(service)
+            else:
+                service_response = service.get_status(self.report_id)
+                self.status = ExamStatus.from_laudo_status(service_response.status)
+                return service_response.err
+        except Exception as e:
+            print(e)
+            return str(e)
 
     def update_in_db_status(self, service: IAIService) -> None | str:
         resp = self.update_in_memory_status(service)
